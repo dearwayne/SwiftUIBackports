@@ -26,10 +26,11 @@ extension Backport where Wrapped == Any {
     /// > The order of some modifiers matter with this implementation. PLEASE REPORT ISSUES ON THE REPO!
     ///
     /// Specifically, its recommended to place `foregroundColor` modifiers BEFORE `font` modifiers to ensure things work as expected.
-    /// 
+    ///
     public struct TextEditor: View {
         @Environment(\.self) private var environment
         @Binding var text: String
+        private let ignoreMarkedText:Bool
 
         /// Creates a plain text editor.
         ///
@@ -50,8 +51,9 @@ extension Backport where Wrapped == Any {
         /// You can define the styling for the text within the view, including the text color, font, and line spacing. You define these styles by applying standard view modifiers to the view. The default text editor doesn’t support rich text, such as styling of individual elements within the editor’s view. The styles you set apply globally to all text in the view.
         ///
         /// - Parameter text: A `Binding` to the variable containing the text to edit.
-        public init(text: Binding<String>) {
+        public init(text: Binding<String>,ignoreMarkedText _ignoreMarkedText:Bool = false) {
             _text = text
+            ignoreMarkedText = _ignoreMarkedText
         }
 
         private var isAccented: Bool {
@@ -83,14 +85,14 @@ extension Backport where Wrapped == Any {
         final class Coordinator: NSObject, UITextViewDelegate {
             let view = UITextView(frame: .zero)
             var parent: TextEditor
-
+            
             init(parent: TextEditor) {
                 self.parent = parent
             }
-
+            
             func update(parent: TextEditor) {
                 self.parent = parent
-                guard view.text != parent.text else { return }
+                guard view.delegate == nil || view.text != parent.text else { return }
 
                 view.delegate = self
                 view.adjustsFontForContentSizeCategory = true
@@ -126,6 +128,8 @@ extension Backport where Wrapped == Any {
             }
 
             func textViewDidChange(_ textView: UITextView) {
+                if parent.ignoreMarkedText,let range = textView.markedTextRange,!range.isEmpty { return }
+                
                 DispatchQueue.main.async { [weak self] in
                     self?.parent.text = textView.text
                 }
@@ -134,3 +138,5 @@ extension Backport where Wrapped == Any {
     }
 }
 #endif
+
+
