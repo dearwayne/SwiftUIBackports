@@ -20,7 +20,7 @@ private struct FocusModifier<Value: Hashable>: ViewModifier {
             .onWillDisappear { focused = nil }
             .sibling(forType: UITextField.self) { proxy in
                 let view = proxy.instance
-                coordinator.observe(field: view)
+                coordinator.observe(field: .textField(view))
 
                 coordinator.onBegin = {
                     focused = value
@@ -39,17 +39,44 @@ private struct FocusModifier<Value: Hashable>: ViewModifier {
                     view.becomeFirstResponder()
                 }
             }
+            .sibling(forType: UITextView.self, body: { proxy in
+                let view = proxy.instance
+                coordinator.observe(field: .textView(view))
+
+                coordinator.onBegin = {
+                    focused = value
+                }
+
+                coordinator.onReturn = {
+                    submit()
+                }
+
+                coordinator.onEnd = {
+                    guard focused == value else { return }
+                    focused = nil
+                }
+
+                if focused == value, view.isUserInteractionEnabled, view.isEditable {
+                    view.becomeFirstResponder()
+                }
+            })
             .backport.onChange(of: focused) { newValue in
                 if newValue == nil {
-                    coordinator.field?.resignFirstResponder()
+                    coordinator.resignFirstResponder()
                 }
             }
     }
 }
 
-private final class Coordinator: NSObject, ObservableObject, UITextFieldDelegate {
-    private(set) weak var field: UITextField?
-    weak var _delegate: UITextFieldDelegate?
+private enum CoordinatorEnum {
+    case textField(UITextField)
+    case textView(UITextView)
+}
+
+private class Coordinator: NSObject, ObservableObject {
+    private var object:CoordinatorEnum?
+    private weak var textFieldDelegate:UITextFieldDelegate?
+    private weak var textViewDelegate:UITextViewDelegate?
 
     var onBegin: () -> Void = { }
     var onReturn: () -> Void = { }
@@ -57,22 +84,68 @@ private final class Coordinator: NSObject, ObservableObject, UITextFieldDelegate
 
     override init() { }
 
-    func observe(field: UITextField) {
-        self.field = field
-
-        if field.delegate !== self && _delegate == nil {
-            _delegate = field.delegate
-            field.delegate = self
+    func observe(field: CoordinatorEnum) {
+        object = field
+        
+        switch field {
+        case .textField(let field):
+            if field.delegate !== self && textFieldDelegate == nil {
+                textFieldDelegate = field.delegate
+                field.delegate = self
+            }
+        case .textView(let field):
+            if field.delegate !== self && textViewDelegate == nil {
+                textViewDelegate = field.delegate
+                field.delegate = self
+            }
+        }
+    }
+    
+    func resignFirstResponder() {
+        switch object {
+        case .textField(let field):
+            field.resignFirstResponder()
+        case .textView(let field):
+            field.resignFirstResponder()
+        case nil:
+            break
         }
     }
 
+    override func responds(to aSelector: Selector!) -> Bool {
+        if super.responds(to: aSelector) { return true }
+        switch object {
+        case .textField:
+            if textFieldDelegate?.responds(to: aSelector) ?? false { return true }
+        case .textView:
+            if textViewDelegate?.responds(to: aSelector) ?? false { return true }
+        case nil:
+            break
+        }
+        return false
+    }
+
+    override func forwardingTarget(for aSelector: Selector!) -> Any? {
+        if super.responds(to: aSelector) { return self }
+        switch object {
+        case .textField:
+            return textFieldDelegate
+        case .textView:
+            return textViewDelegate
+        default:
+            return nil
+        }
+    }
+}
+
+extension Coordinator: UITextFieldDelegate {
     func textFieldDidBeginEditing(_ textField: UITextField) {
-        _delegate?.textFieldDidBeginEditing?(textField)
+        textFieldDelegate?.textFieldDidBeginEditing?(textField)
         onBegin()
     }
 
     func textFieldDidEndEditing(_ textField: UITextField) {
-        _delegate?.textFieldDidEndEditing?(textField)
+        textFieldDelegate?.textFieldDidEndEditing?(textField)
         onEnd()
     }
 
@@ -81,16 +154,25 @@ private final class Coordinator: NSObject, ObservableObject, UITextFieldDelegate
         // prevent auto-resign
         return false
     }
+}
 
-    override func responds(to aSelector: Selector!) -> Bool {
-        if super.responds(to: aSelector) { return true }
-        if _delegate?.responds(to: aSelector) ?? false { return true }
-        return false
+extension Coordinator: UITextViewDelegate {
+    func textViewDidBeginEditing(_ textView: UITextView) {
+        textViewDelegate?.textViewDidBeginEditing?(textView)
+        onBegin()
     }
-
-    override func forwardingTarget(for aSelector: Selector!) -> Any? {
-        if super.responds(to: aSelector) { return self }
-        return _delegate
+    
+    func textViewDidEndEditing(_ textView: UITextView) {
+        textViewDelegate?.textViewDidEndEditing?(textView)
+        onEnd()
+    }
+    
+    func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        if textView.returnKeyType != .default,text == "\n" {
+            onReturn()
+            return false
+        }
+        return textViewDelegate?.textView?(textView, shouldChangeTextIn: range, replacementText: text) ?? true
     }
 }
 
